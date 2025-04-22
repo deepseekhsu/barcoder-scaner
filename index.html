@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>離線條碼掃描器</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      font-family: sans-serif;
+      background: #111;
+      color: #fff;
+    }
+
+    #previewContainer {
+      height: 30vh;
+      background: #000;
+    }
+
+    #preview {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #controls {
+      background: #222;
+      padding: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-around;
+      gap: 10px;
+    }
+
+    #controls button, #controls input[type="text"] {
+      flex: 1 1 45%;
+      font-size: 1em;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    #csvInput {
+      flex: 1 1 100%;
+      font-size: 1em;
+      padding: 8px;
+      background: #fff;
+      color: #000;
+    }
+
+    #resultsContainer {
+      flex: 1 1 auto;
+      background: #fff;
+      color: #000;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9em;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px;
+      text-align: center;
+      word-break: break-word;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+
+    .deleteBtn {
+      color: red;
+      cursor: pointer;
+    }
+
+    .highlight {
+      background-color: yellow !important;
+      transition: background-color 1s ease;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="previewContainer">
+    <video id="preview" autoplay muted playsinline></video>
+  </div>
+
+  <div id="controls">
+    <button onclick="startCamera()">啟用攝影機</button>
+    <button onclick="scanOnce()">掃描一次</button>
+    <button onclick="downloadData('csv')">下載 CSV</button>
+    <button onclick="downloadData('txt')">下載 TXT</button>
+    <input type="text" id="searchBox" placeholder="搜尋掃描內容..." oninput="updateResultsTable()">
+    <input type="file" id="csvInput" accept=".csv" onchange="importCSV(event)">
+  </div>
+
+  <div id="resultsContainer">
+    <table>
+      <thead>
+        <tr>
+          <th>編號</th>
+          <th>時間</th>
+          <th>掃描內容</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+
+  <audio id="beep" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0Yf///wAA" preload="auto"></audio>
+
+  <script>
+    let barcodeDetector = null;
+    let mediaStream = null;
+    let resultsList = [];
+
+    if (localStorage.getItem("barcodeData")) {
+      try {
+        resultsList = JSON.parse(localStorage.getItem("barcodeData"));
+        updateResultsTable();
+      } catch (e) {
+        console.warn("無法讀取本地資料");
+      }
+    }
+
+    function saveToLocalStorage() {
+      localStorage.setItem("barcodeData", JSON.stringify(resultsList));
+    }
+
+    function startCamera() {
+      if (!('BarcodeDetector' in window)) {
+        alert("請使用支援 BarcodeDetector 的瀏覽器，如 Chrome 最新版");
+        return;
+      }
+
+      barcodeDetector = new BarcodeDetector({ formats: ['ean_13', 'code_128', 'qr_code'] });
+
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
+      }).then(stream => {
+        mediaStream = stream;
+        const video = document.getElementById('preview');
+        video.srcObject = stream;
+        video.play();
+      }).catch(err => {
+        alert("無法開啟攝影機：" + err);
+      });
+    }
+
+    function scanOnce() {
+      const video = document.getElementById('preview');
+      if (!barcodeDetector || !video.srcObject) {
+        alert("請先啟用攝影機");
+        return;
+      }
+
+      barcodeDetector.detect(video).then(barcodes => {
+        if (barcodes.length > 0) {
+          const code = barcodes[0].rawValue;
+          const timestamp = new Date().toLocaleString('zh-TW', { hour12: false });
+          resultsList.unshift({ timestamp, code });
+          updateResultsTable();
+          saveToLocalStorage();
+          document.getElementById('beep').play();
+        } else {
+          alert("未偵測到條碼，請再試一次");
+        }
+      }).catch(err => {
+        console.error("掃描失敗:", err);
+      });
+    }
+
+    function updateResultsTable() {
+      const tbody = document.getElementById('resultsBody');
+      const keyword = document.getElementById('searchBox').value.trim().toLowerCase();
+      tbody.innerHTML = "";
+
+      resultsList.forEach((item, index) => {
+        const scanOrder = resultsList.length - index;
+        const match = item.code.toLowerCase().includes(keyword);
+        const row = document.createElement('tr');
+
+        row.innerHTML = `
+          <td>${scanOrder}</td>
+          <td>${item.timestamp}</td>
+          <td>${item.code}</td>
+          <td><span class="deleteBtn" onclick="deleteEntry(${index})">刪除</span></td>
+        `;
+
+        if (index === 0 && keyword === "") {
+          row.classList.add('highlight');
+          setTimeout(() => row.classList.remove('highlight'), 1000);
+        } else if (match && keyword !== "") {
+          row.style.backgroundColor = '#ffff88';
+        }
+
+        tbody.appendChild(row);
+      });
+
+      document.getElementById('resultsContainer').scrollTop = 0;
+    }
+
+    function deleteEntry(index) {
+      resultsList.splice(index, 1);
+      updateResultsTable();
+      saveToLocalStorage();
+    }
+
+    function downloadData(type) {
+      if (resultsList.length === 0) {
+        alert("尚無掃描資料");
+        return;
+      }
+
+      let content = "";
+      resultsList.slice().reverse().forEach((item, i) => {
+        content += `${i + 1},${item.timestamp},${item.code}\n`;
+      });
+
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `barcode_data.${type}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function importCSV(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const lines = e.target.result.trim().split('\n');
+        lines.forEach((line, index) => {
+          if (index === 0 && line.toLowerCase().includes("編號")) return;
+
+          const parts = line.split(',');
+          if (parts.length >= 3) {
+            const timestamp = parts[1].trim();
+            const code = parts.slice(2).join(',').trim();
+            resultsList.push({ timestamp, code });
+          }
+        });
+
+        updateResultsTable();
+        saveToLocalStorage();
+        alert("匯入完成，共新增 " + (lines.length - 1) + " 筆");
+        document.getElementById('csvInput').value = "";
+      };
+      reader.readAsText(file);
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+      }
+    });
+  </script>
+</body>
+</html>
